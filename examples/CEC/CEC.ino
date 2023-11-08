@@ -19,9 +19,13 @@
 // SD3 GPIO10  SD_D3
 // CMD GPIO11  SD_CMD
 
+static boolean noResponseYet = true;
+static boolean weReady = false;
+static boolean startupSent = false;
+
 #define CEC_GPIO 5
 #define CEC_DEVICE_TYPE CEC_Device::CDT_PLAYBACK_DEVICE
-#define CEC_PHYSICAL_ADDRESS 0x2000
+#define CEC_PHYSICAL_ADDRESS 0x3000
 
 // implement application specific CEC device
 class MyCEC_Device : public CEC_Device
@@ -54,6 +58,8 @@ void MyCEC_Device::SetLineState(bool state)
 
 void MyCEC_Device::OnReady(int logicalAddress)
 {
+  // At this point we have a logical address
+  weReady = true;
 	// This is called after the logical address has been allocated
 
 	unsigned char buf[4] = {0x84, CEC_PHYSICAL_ADDRESS >> 8, CEC_PHYSICAL_ADDRESS & 0xff, CEC_DEVICE_TYPE};
@@ -90,7 +96,7 @@ void MyCEC_Device::OnReceiveComplete(unsigned char* buffer, int count, bool ack)
 		break;
 	}
 	case 0x8c: // <Give Device Vendor ID>
-		TransmitFrame(0xf, (unsigned char*)"\x87\x01\x23\x45", 4); // <Device Vendor ID>
+		TransmitFrame(0xf, (unsigned char*)"\x87\x00\xF1\x0E", 4); // <Device Vendor ID>
 		break;
 	}
 }
@@ -104,6 +110,16 @@ void MyCEC_Device::OnTransmitComplete(unsigned char* buffer, int count, bool ack
 	if (!ack)
 		DbgPrint(" NAK");
 	DbgPrint("\n");
+
+  // If we haven't succeeded in sending anything, assume the TV is off
+  if(!ack) {
+    noResponseYet = true;
+    startupSent = false;
+  }
+  // If we've sent something but haven't had a response yet, the TV hasn't turned on yet
+  if(ack && noResponseYet) {
+    startupSent = false;
+  }
 }
 
 
@@ -111,24 +127,26 @@ MyCEC_Device device;
 
 void setup()
 {
+  weReady = false;
+  noResponseYet = true;
+  startupSent = false;
 	pinMode(CEC_GPIO, INPUT_PULLUP);
 
 	Serial.begin(115200);
+  DbgPrint("Serial is up\n");
 	device.Initialize(CEC_PHYSICAL_ADDRESS, CEC_DEVICE_TYPE, true); // Promiscuous mode
+  DbgPrint("Init complete.\n");
 }
 
 void loop()
 {
-	if (Serial.available()) {
-		unsigned char c = Serial.read();
-		unsigned char buffer[3];
-    
-		switch (c) {
-		case '1':
-			buffer[0] = 0x36;
-			device.TransmitFrame(4, buffer, 1);
-			break;
-		}
-	}
+  if(weReady && noResponseYet && !startupSent) {
+    delay(500);
+    DbgPrint("Sending out startup\n");
+    unsigned char buffer[4] = {0, 0, 0, 0};
+    buffer[0] = 0x04;
+    device.TransmitFrame(0, buffer, 1);
+    startupSent = true;
+  }
 	device.Run();
 }
